@@ -1,0 +1,215 @@
+# ==============================================================================
+# Observability Stack — Grafana + Prometheus + Loki + Alloy + cAdvisor + Node Exporter
+#
+# Uso:
+#   cp .env.example .env   # e edite os valores
+#   docker compose up -d
+#   docker compose ps
+#   docker compose logs -f
+#   docker compose down
+#
+# Nenhuma versão usa `latest`: cada imagem está fixada na última versão
+# estável verificada em 2026-08-30 (ver README > "Versões escolhidas").
+# ==============================================================================
+
+networks:
+  monitoring:
+    name: monitoring
+    driver: bridge
+
+volumes:
+  grafana_data:
+  prometheus_data:
+  loki_data:
+
+services:
+  # ----------------------------------------------------------------------------
+  # Grafana — único serviço exposto fora da rede Docker interna.
+  # Datasources, dashboards e alertas são 100% provisionados via arquivo,
+  # sem nenhuma configuração manual pela UI.
+  # ----------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana-oss:13.0.2
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      TZ: ${TZ:-UTC}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?defina GRAFANA_ADMIN_PASSWORD no .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000}
+      # Instalação automática do plugin HTML Graphics (sem UI, sem passo manual).
+      GF_INSTALL_PLUGINS: gapit-htmlgraphics-panel
+      # Necessário para o plugin renderizar HTML/SVG/JS customizado nos painéis.
+      # Só afeta painéis do tipo "HTML Graphics" que nós mesmos versionamos nos
+      # dashboards JSON — não expõe input de terceiros, ver README > Segurança.
+      GF_PANELS_DISABLE_SANITIZE_HTML: "true"
+      # Alertas por e-mail (opcional). ALERT_SMTP_ENABLED continua "false" até
+      # você preencher as credenciais SMTP no .env.
+      GF_SMTP_ENABLED: ${ALERT_SMTP_ENABLED:-false}
+      GF_SMTP_HOST: ${ALERT_SMTP_HOST:-}
+      GF_SMTP_USER: ${ALERT_SMTP_USER:-}
+      GF_SMTP_PASSWORD: ${ALERT_SMTP_PASSWORD:-}
+      GF_SMTP_FROM_ADDRESS: ${ALERT_SMTP_FROM_ADDRESS:-alerts@example.com}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks: [monitoring]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    mem_limit: ${GRAFANA_MEM_LIMIT:-256m}
+
+  # ----------------------------------------------------------------------------
+  # Prometheus — coleta e armazena métricas. Não exposto ao host: só acessível
+  # dentro da rede `monitoring` (Grafana fala com ele via nome de serviço).
+  # ----------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION_DAYS:-15d}
+      - --storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-5GB}
+      # Permite recarregar prometheus.yml/targets sem reiniciar o container
+      # (POST /-/reload) — usado ao adicionar novos targets em targets/.
+      - --web.enable-lifecycle
+      # Necessário para scripts/backup.sh tirar snapshots consistentes da TSDB.
+      # Seguro aqui porque a porta 9090 não é publicada no host.
+      - --web.enable-admin-api
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - ./prometheus/targets:/etc/prometheus/targets:ro
+      - prometheus_data:/prometheus
+    networks: [monitoring]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9090/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    mem_limit: ${PROMETHEUS_MEM_LIMIT:-768m}
+
+  # ----------------------------------------------------------------------------
+  # Loki — armazenamento e consulta de logs (filesystem storage, single binary,
+  # adequado para uma única VPS — ver loki/loki-config.yml).
+  # ----------------------------------------------------------------------------
+  loki:
+    image: grafana/loki:3.7.7
+    restart: unless-stopped
+    # -config.expand-env permite usar ${LOKI_RETENTION_DAYS} dentro do
+    # loki-config.yml, resolvido a partir do .env.
+    command: -config.file=/etc/loki/loki-config.yml -config.expand-env=true
+    environment:
+      TZ: ${TZ:-UTC}
+      LOKI_RETENTION_DAYS: ${LOKI_RETENTION_DAYS:-14d}
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    networks: [monitoring]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3100/ready || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    mem_limit: ${LOKI_MEM_LIMIT:-512m}
+
+  # ----------------------------------------------------------------------------
+  # Alloy — coletor de logs (substitui o Promtail, EOL desde 02/2026).
+  # Lê logs de containers via socket Docker (sem alterar log-driver das
+  # aplicações) e logs do host via journald.
+  # ----------------------------------------------------------------------------
+  alloy:
+    image: grafana/alloy:v1.19.2
+    restart: unless-stopped
+    depends_on:
+      loki:
+        condition: service_healthy
+    command:
+      - run
+      # UI/API de debug do Alloy fica só em loopback DENTRO do container —
+      # não é publicada no host, então não é acessível de fora.
+      - --server.http.listen-addr=127.0.0.1:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    environment:
+      TZ: ${TZ:-UTC}
+      VPS_HOSTNAME: ${VPS_HOSTNAME:-vps-01}
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /run/log/journal:/run/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+    networks: [monitoring]
+    # Sem healthcheck HTTP: a imagem não traz wget/curl. O restart policy +
+    # a métrica `up{job="alloy"}` no Prometheus cobrem a detecção de falha
+    # (ver README > Troubleshooting) em vez de um healthcheck frágil.
+    mem_limit: ${ALLOY_MEM_LIMIT:-256m}
+
+  # ----------------------------------------------------------------------------
+  # cAdvisor — métricas por container (CPU, memória, rede, disco).
+  # ----------------------------------------------------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.55.1
+    restart: unless-stopped
+    # cgroup v2 (padrão no Ubuntu 24.04) exige acesso amplo a /sys e aos
+    # devices do host para relatar métricas completas de containers e disco.
+    # Ver README > cAdvisor para o detalhe de cada mount e o motivo do
+    # privileged: true nesta versão/base.
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+    environment:
+      TZ: ${TZ:-UTC}
+    networks: [monitoring]
+    # Sem healthcheck: a imagem do cAdvisor não inclui wget/curl/shell útil.
+    # O Prometheus scrape (`up{job="cadvisor"}`) já detecta indisponibilidade.
+    mem_limit: ${CADVISOR_MEM_LIMIT:-256m}
+
+  # ----------------------------------------------------------------------------
+  # Node Exporter — métricas de sistema operacional do host (CPU, RAM, disco,
+  # filesystem, rede, load, uptime).
+  # ----------------------------------------------------------------------------
+  node-exporter:
+    image: quay.io/prometheus/node-exporter:v1.12.1
+    restart: unless-stopped
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host/root
+      # Ignora mounts de containers/overlay para não poluir node_filesystem_*
+      # com dezenas de séries irrelevantes (evita alta cardinalidade).
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|run/docker/.+)($$|/)
+      - --collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$$
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro
+    environment:
+      TZ: ${TZ:-UTC}
+    networks: [monitoring]
+    # Sem healthcheck: imagem distroless (sem shell/wget). Coberto pelo
+    # restart policy + `up{job="node-exporter"}` no Prometheus.
+    mem_limit: ${NODE_EXPORTER_MEM_LIMIT:-128m}

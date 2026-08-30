@@ -1,0 +1,29 @@
+# Recording rules para métricas de host (Node Exporter).
+#
+# Por quê: as expressões abaixo são reutilizadas em 2 dashboards
+# (Infrastructure Overview e Host Metrics) várias vezes cada. Pré-computá-las
+# a cada 30s evita recalcular a mesma agregação em toda renderização de painel
+# e mantém as queries dos dashboards curtas e legíveis.
+groups:
+  - name: system.rules
+    interval: 30s
+    rules:
+      - record: instance:node_cpu_utilization:ratio
+        expr: 1 - avg by (instance, host) (rate(node_cpu_seconds_total{mode="idle"}[5m]))
+
+      - record: instance:node_memory_used:percentage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100
+
+      # Fica sem dado (NaN) em hosts sem swap configurado — comportamento
+      # esperado, o painel deve tratar "sem dado" como "sem swap".
+      - record: instance:node_swap_used:percentage
+        expr: ((node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes) / node_memory_SwapTotal_bytes) * 100
+
+      - record: instance:node_filesystem_used:percentage
+        expr: (1 - (node_filesystem_avail_bytes{fstype!=""} / node_filesystem_size_bytes{fstype!=""})) * 100
+
+      # Load average de 1 minuto normalizado pelo número de CPUs, para que o
+      # valor seja comparável entre VPS com tamanhos diferentes (1.0 = 100%
+      # dos núcleos ocupados).
+      - record: instance:node_load1:normalized
+        expr: node_load1 / count without (cpu, mode) (node_cpu_seconds_total{mode="idle"})

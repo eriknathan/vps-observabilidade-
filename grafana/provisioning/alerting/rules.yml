@@ -1,0 +1,277 @@
+# Regras de alerta provisionadas via código (Grafana Unified Alerting).
+# Cada regra usa o padrão "query (A) -> reduce (B) -> threshold (C)" gerado
+# pelo próprio Grafana, para que fiquem idênticas ao que a UI produziria —
+# facilita depurar/editar depois.
+#
+# Thresholds e janelas de tempo (`for`) — justificativa de cada um:
+#   - CPU 85% / 10m: sustentado, não pico pontual (cron, backup, deploy).
+#   - Memória usada 90% / 10m: ainda dá margem antes do OOM-killer agir.
+#   - Disco 80% / 15m: linha de warning padrão da indústria, tempo de reação
+#     confortável (disco enche devagar).
+#   - Disco 90% / 5m: crítico, reação rápida antes do disco esgotar de vez.
+#   - Host down (`up == 0`) / 2m: ~8 scrapes perdidos no intervalo padrão de
+#     15s — filtra reinícios rápidos do Prometheus, não do host monitorado.
+#   - Container reiniciando / 5m: >2 reinícios em 15 minutos já indica
+#     crash loop, não uma reinicialização manual isolada.
+#   - Taxa de erro em logs / 5m: limiar inicial conservador (20 linhas com
+#     nível "error" em 5 minutos); ajuste no arquivo conforme o volume normal
+#     das suas aplicações — não existe um valor universalmente correto aqui.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: infraestrutura-vps
+    folder: Observability
+    interval: 1m
+    rules:
+      - uid: alert-host-down
+        title: Host down
+        condition: C
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Node Exporter não responde há mais de 2 minutos"
+          description: "O Prometheus não consegue coletar métricas do host — verifique se a VPS está no ar e se o container node-exporter está saudável."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: up{job="node-exporter"}
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: "__expr__"
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+        noDataState: Alerting
+        execErrState: Alerting
+
+      - uid: alert-cpu-high
+        title: CPU sustentada acima de 85%
+        condition: C
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU do host {{ $labels.instance }} acima de 85% por mais de 10 minutos"
+          description: "Verifique quais processos/containers estão consumindo CPU no dashboard Docker / Containers."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: instance:node_cpu_utilization:ratio * 100
+              instant: false
+              range: true
+          - refId: B
+            datasourceUid: "__expr__"
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [85] }
+        noDataState: NoData
+        execErrState: Error
+
+      - uid: alert-memory-low
+        title: Memória disponível muito baixa
+        condition: C
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Uso de memória do host {{ $labels.instance }} acima de 90% por mais de 10 minutos"
+          description: "Memória disponível abaixo de 10% de forma sustentada — risco de OOM-killer encerrar processos/containers."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: instance:node_memory_used:percentage
+              instant: false
+              range: true
+          - refId: B
+            datasourceUid: "__expr__"
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [90] }
+        noDataState: NoData
+        execErrState: Error
+
+      - uid: alert-disk-warning
+        title: Filesystem acima de 80%
+        condition: C
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Filesystem {{ $labels.mountpoint }} em {{ $labels.instance }} acima de 80% de uso"
+          description: "Considere liberar espaço ou planejar expansão de disco."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: instance:node_filesystem_used:percentage
+              instant: false
+              range: true
+          - refId: B
+            datasourceUid: "__expr__"
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [80] }
+        noDataState: NoData
+        execErrState: Error
+
+      - uid: alert-disk-critical
+        title: Filesystem acima de 90%
+        condition: C
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Filesystem {{ $labels.mountpoint }} em {{ $labels.instance }} acima de 90% de uso — crítico"
+          description: "Ação imediata recomendada: disco perto de encher pode derrubar Prometheus, Loki e as aplicações da VPS."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: instance:node_filesystem_used:percentage
+              instant: false
+              range: true
+          - refId: B
+            datasourceUid: "__expr__"
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [90] }
+        noDataState: NoData
+        execErrState: Error
+
+      - uid: alert-container-restarting
+        title: Container reiniciando excessivamente
+        condition: C
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} reiniciou mais de 2 vezes nos últimos 15 minutos"
+          description: "Possível crash loop — veja os logs do container no dashboard Logs Overview."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: changes(container_start_time_seconds{name!=""}[15m])
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: "__expr__"
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [2] }
+        noDataState: NoData
+        execErrState: Error
+
+      - uid: alert-log-error-rate
+        title: Aumento anormal de erros nos logs
+        condition: C
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mais de 20 linhas de log com nível error em 5 minutos"
+          description: "Ajuste o limiar em rules.yml conforme o volume normal de erro das suas aplicações — 20/5m é um ponto de partida conservador."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: loki
+            model:
+              refId: A
+              expr: sum(count_over_time({job="docker"} | detected_level="error" [5m]))
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: "__expr__"
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [20] }
+        noDataState: OK
+        execErrState: Error

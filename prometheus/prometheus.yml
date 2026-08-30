@@ -1,0 +1,72 @@
+# Prometheus não faz expansão de variáveis de ambiente no arquivo de config,
+# por isso os valores abaixo são literais. Se você adicionar mais de uma VPS,
+# ajuste o `replacement` dos relabel_configs abaixo (label `host`) nesta
+# cópia para identificar cada instância.
+#
+# Nota: `global.external_labels` só é anexado em federation/remote_write,
+# NÃO nas séries armazenadas localmente — por isso o label `host` é injetado
+# via `relabel_configs` (target_label) em cada job, o que faz ele existir de
+# verdade nos dados e alimentar a variável $hostname dos dashboards.
+global:
+  scrape_interval: 15s      # padrão saudável para host+containers; ver README > Performance
+  evaluation_interval: 15s
+  external_labels:
+    host: vps-01
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  # --------------------------------------------------------------------------
+  # O próprio Prometheus
+  # --------------------------------------------------------------------------
+  - job_name: prometheus
+    relabel_configs:
+      - target_label: host
+        replacement: vps-01
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # --------------------------------------------------------------------------
+  # Métricas do host (CPU, RAM, disco, rede, uptime, load...)
+  # --------------------------------------------------------------------------
+  - job_name: node-exporter
+    relabel_configs:
+      - target_label: host
+        replacement: vps-01
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  # --------------------------------------------------------------------------
+  # Métricas por container Docker
+  # --------------------------------------------------------------------------
+  - job_name: cadvisor
+    relabel_configs:
+      - target_label: host
+        replacement: vps-01
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  # --------------------------------------------------------------------------
+  # Métricas internas do próprio Grafana (meta-monitoramento)
+  # --------------------------------------------------------------------------
+  - job_name: grafana
+    metrics_path: /metrics
+    relabel_configs:
+      - target_label: host
+        replacement: vps-01
+    static_configs:
+      - targets: ["grafana:3000"]
+
+  # --------------------------------------------------------------------------
+  # Targets adicionais (outras VPS, aplicações, APIs, exporters futuros).
+  # Basta criar um arquivo *.json em prometheus/targets/ seguindo o modelo
+  # de additional-targets.json.example — o Prometheus recarrega sozinho
+  # (file_sd_configs faz polling do diretório, sem precisar de restart nem
+  # de `docker compose up -d` novamente).
+  # --------------------------------------------------------------------------
+  - job_name: file-sd-targets
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/targets/*.json
+        refresh_interval: 1m

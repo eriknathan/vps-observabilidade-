@@ -1,0 +1,29 @@
+# Recording rules para métricas por container (cAdvisor).
+#
+# Por quê: o dashboard "Docker / Containers" usa estas mesmas agregações em
+# múltiplos painéis (overview, Top 10 CPU, Top 10 memória, Top 10 rede).
+# `name!=""` filtra os cgroups internos do cAdvisor (host root, slice do
+# dockerd) que não representam containers de verdade. `host` é mantido no
+# agrupamento para não misturar containers de VPS diferentes quando a stack
+# for expandida (ver prometheus.yml > relabel_configs).
+groups:
+  - name: docker.rules
+    interval: 30s
+    rules:
+      - record: container:cpu_usage:rate5m
+        expr: sum by (name, image, host) (rate(container_cpu_usage_seconds_total{name!=""}[5m]))
+
+      - record: container:memory_usage:bytes
+        expr: sum by (name, image, host) (container_memory_working_set_bytes{name!=""})
+
+      - record: container:network_receive:rate5m
+        expr: sum by (name, host) (rate(container_network_receive_bytes_total{name!=""}[5m]))
+
+      - record: container:network_transmit:rate5m
+        expr: sum by (name, host) (rate(container_network_transmit_bytes_total{name!=""}[5m]))
+
+      - record: container:fs_reads:rate5m
+        expr: sum by (name, host) (rate(container_fs_reads_bytes_total{name!=""}[5m]))
+
+      - record: container:fs_writes:rate5m
+        expr: sum by (name, host) (rate(container_fs_writes_bytes_total{name!=""}[5m]))

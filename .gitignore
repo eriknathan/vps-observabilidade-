@@ -1,0 +1,22 @@
+# Segredos e configuração local — nunca versionar
+.env
+*.env
+!.env.example
+
+# Backups gerados por scripts/backup.sh
+backups/
+
+# Logs locais
+*.log
+
+# Dados persistentes, caso alguém troque volumes nomeados por bind mounts locais
+data/
+prometheus-data/
+grafana-data/
+loki-data/
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp

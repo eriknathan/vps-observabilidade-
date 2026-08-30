@@ -1,0 +1,31 @@
+# Datasources provisionados automaticamente — disponíveis assim que o
+# Grafana sobe, sem passar por Connections > Data Sources na UI.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 15s
+      httpMethod: POST
+      # Prometheus não é acessado por engines de LLM/tracing aqui; caching
+      # padrão do Grafana é suficiente para uma única VPS.
+    editable: false
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      maxLines: 1000
+      # Correlação: um clique num log com um trace/estrutura numérica não é
+      # usado aqui (não há tracing na stack). A navegação métricas -> logs é
+      # feita via data links nos próprios painéis dos dashboards (ver
+      # docker-containers.json e logs-overview.json), filtrando por
+      # `container` — mais direto que derivedFields para este caso de uso.
+    editable: false

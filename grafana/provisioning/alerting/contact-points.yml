@@ -1,0 +1,48 @@
+# Contact points provisionados via código. Todos os canais pedidos no spec
+# (e-mail, Slack, Discord, Telegram, webhook genérico) já existem como
+# receivers dentro do contact point "equipe-ops" — habilitar um canal é só
+# preencher as variáveis correspondentes no .env, sem tocar neste arquivo
+# nem na UI do Grafana.
+#
+# Por padrão GF_SMTP_ENABLED=false (ver docker-compose.yml/.env.example),
+# então o receiver de e-mail existe mas não envia nada até você configurar
+# SMTP. Os demais usam valores placeholder (não vazios) para não quebrar a
+# validação de provisionamento no boot — ver .env.example.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: equipe-ops
+    receivers:
+      - uid: equipe-ops-email
+        type: email
+        settings:
+          addresses: $ALERT_SMTP_FROM_ADDRESS
+          singleEmail: true
+        disableResolveMessage: false
+
+      - uid: equipe-ops-slack
+        type: slack
+        settings:
+          url: $ALERT_SLACK_WEBHOOK_URL
+        disableResolveMessage: false
+
+      - uid: equipe-ops-discord
+        type: discord
+        settings:
+          url: $ALERT_DISCORD_WEBHOOK_URL
+        disableResolveMessage: false
+
+      - uid: equipe-ops-telegram
+        type: telegram
+        settings:
+          bottoken: $ALERT_TELEGRAM_BOT_TOKEN
+          chatid: $ALERT_TELEGRAM_CHAT_ID
+        disableResolveMessage: false
+
+      - uid: equipe-ops-webhook
+        type: webhook
+        settings:
+          url: $ALERT_GENERIC_WEBHOOK_URL
+          httpMethod: POST
+        disableResolveMessage: false

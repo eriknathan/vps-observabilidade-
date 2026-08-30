@@ -1,0 +1,16 @@
+[
+  {
+    "targets": ["outra-vps.exemplo.com:9100"],
+    "labels": {
+      "job": "node-exporter",
+      "host": "outra-vps"
+    }
+  },
+  {
+    "targets": ["minha-api.exemplo.com:9000"],
+    "labels": {
+      "job": "minha-api",
+      "host": "vps-01"
+    }
+  }
+]

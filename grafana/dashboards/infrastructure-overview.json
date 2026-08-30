@@ -1,0 +1,165 @@
+{
+  "uid": "infrastructure-overview",
+  "title": "Infrastructure Overview",
+  "description": "Visão geral da saúde da VPS: CPU, RAM, swap, disco, rede, load, uptime e containers. Ponto de partida para responder 'minha VPS está saudável?'",
+  "tags": ["observability", "overview", "vps"],
+  "timezone": "",
+  "editable": true,
+  "graphTooltip": 1,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "gapit-htmlgraphics-panel",
+      "title": "",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 4 },
+      "pluginVersion": "2.2.3",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "instance:node_cpu_utilization:ratio * 100", "instant": true },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "instance:node_memory_used:percentage", "instant": true },
+        { "refId": "C", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "max(instance:node_filesystem_used:percentage{mountpoint=\"/\"})", "instant": true },
+        { "refId": "D", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "count(container_last_seen{name!=\"\"})", "instant": true }
+      ],
+      "options": {
+        "mutateCalcs": "standard",
+        "fitContent": false,
+        "centerContent": false,
+        "overflow": "hidden",
+        "useGrafanaScrollbar": false,
+        "rootCss": "",
+        "css": ".vps-status{display:flex;align-items:center;justify-content:space-between;height:100%;padding:0 24px;font-family:inherit;color:#d8d9da}.vps-status h2{margin:0;font-size:16px;letter-spacing:.08em;text-transform:uppercase;opacity:.7}.vps-metrics{display:flex;gap:32px}.vps-metric{text-align:center}.vps-metric .value{font-size:26px;font-weight:600}.vps-metric .label{font-size:11px;opacity:.6;text-transform:uppercase}.vps-badge{font-size:14px;font-weight:600;padding:6px 14px;border-radius:16px}.ok{background:rgba(87,148,58,.25);color:#73bf69}.warn{background:rgba(255,152,48,.25);color:#ff9830}",
+        "html": "<div class=\"vps-status\"><h2>VPS Status</h2><div class=\"vps-metrics\"><div class=\"vps-metric\"><div class=\"value\" id=\"m-cpu\">--</div><div class=\"label\">CPU</div></div><div class=\"vps-metric\"><div class=\"value\" id=\"m-ram\">--</div><div class=\"label\">RAM</div></div><div class=\"vps-metric\"><div class=\"value\" id=\"m-disk\">--</div><div class=\"label\">Disk</div></div><div class=\"vps-metric\"><div class=\"value\" id=\"m-containers\">--</div><div class=\"label\">Containers</div></div></div><div class=\"vps-badge ok\" id=\"m-badge\">● HEALTHY</div></div>",
+        "onRender": "try { var series = (htmlGraphics.data && htmlGraphics.data.series) || []; function lastValue(refId) { var s = series.find(function(x){ return x.refId === refId; }); if (!s || !s.fields) return null; var f = s.fields.find(function(fld){ return fld.type === 'number'; }); if (!f || !f.values) return null; var vals = f.values.toArray ? f.values.toArray() : f.values; return vals.length ? vals[vals.length - 1] : null; } var cpu = lastValue('A'); var ram = lastValue('B'); var disk = lastValue('C'); var containers = lastValue('D'); var fmt = function(v){ return (v === null || v === undefined || isNaN(v)) ? '--' : Math.round(v) + '%'; }; htmlNode.getElementById('m-cpu').textContent = fmt(cpu); htmlNode.getElementById('m-ram').textContent = fmt(ram); htmlNode.getElementById('m-disk').textContent = fmt(disk); htmlNode.getElementById('m-containers').textContent = (containers === null || containers === undefined) ? '--' : Math.round(containers); var badge = htmlNode.getElementById('m-badge'); var degraded = (cpu !== null && cpu >= 85) || (ram !== null && ram >= 90) || (disk !== null && disk >= 90); if (degraded) { badge.className = 'vps-badge warn'; badge.textContent = '● ATTENTION'; } else { badge.className = 'vps-badge ok'; badge.textContent = '● HEALTHY'; } } catch (e) { /* painel decorativo: falha aqui não afeta os stats nativos abaixo */ }",
+        "runOnRender": true,
+        "dynamicHtmlGraphics": false,
+        "dynamicData": true,
+        "dynamicFieldDisplayValues": false,
+        "dynamicProps": false,
+        "triggerPanelupdate": true,
+        "triggerOnInitOnResize": false,
+        "onInit": "",
+        "svgBaseFix": false,
+        "customProperties": "{}"
+      }
+    },
+    {
+      "id": 2, "type": "stat", "title": "CPU",
+      "gridPos": { "x": 0, "y": 4, "w": 3, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "instance:node_cpu_utilization:ratio * 100", "instant": true }],
+      "fieldConfig": { "defaults": { "unit": "percent", "decimals": 1, "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 85 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto" }
+    },
+    {
+      "id": 3, "type": "stat", "title": "RAM",
+      "gridPos": { "x": 3, "y": 4, "w": 3, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "instance:node_memory_used:percentage", "instant": true }],
+      "fieldConfig": { "defaults": { "unit": "percent", "decimals": 1, "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 75 }, { "color": "red", "value": 90 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto" }
+    },
+    {
+      "id": 4, "type": "stat", "title": "Swap",
+      "gridPos": { "x": 6, "y": 4, "w": 3, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "instance:node_swap_used:percentage", "instant": true }],
+      "fieldConfig": { "defaults": { "unit": "percent", "decimals": 1, "min": 0, "max": 100, "noValue": "sem swap", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 80 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto" }
+    },
+    {
+      "id": 5, "type": "stat", "title": "Disk (/)",
+      "gridPos": { "x": 9, "y": 4, "w": 3, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "max(instance:node_filesystem_used:percentage{mountpoint=\"/\"})", "instant": true }],
+      "fieldConfig": { "defaults": { "unit": "percent", "decimals": 1, "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 80 }, { "color": "red", "value": 90 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto" }
+    },
+    {
+      "id": 6, "type": "stat", "title": "Network I/O",
+      "gridPos": { "x": 12, "y": 4, "w": 3, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(rate(node_network_receive_bytes_total{device!~\"lo|veth.*|docker.*|br-.*\"}[5m])) + sum(rate(node_network_transmit_bytes_total{device!~\"lo|veth.*|docker.*|br-.*\"}[5m]))", "instant": true }],
+      "fieldConfig": { "defaults": { "unit": "Bps", "decimals": 1, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto" }
+    },
+    {
+      "id": 7, "type": "stat", "title": "Load (1m)",
+      "gridPos": { "x": 15, "y": 4, "w": 3, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "node_load1", "instant": true }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 2, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto" }
+    },
+    {
+      "id": 8, "type": "stat", "title": "Uptime",
+      "gridPos": { "x": 18, "y": 4, "w": 3, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "time() - node_boot_time_seconds", "instant": true }],
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 0, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "none", "justifyMode": "auto" }
+    },
+    {
+      "id": 9, "type": "stat", "title": "Containers ativos",
+      "gridPos": { "x": 21, "y": 4, "w": 3, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "count(container_last_seen{name!=\"\"})", "instant": true }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "thresholds": { "mode": "absolute", "steps": [ { "color": "blue", "value": null } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto" }
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "CPU ao longo do tempo",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "instance:node_cpu_utilization:ratio * 100", "legendFormat": "CPU {{instance}}" }],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 15, "spanNulls": false, "pointSize": 5 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "Memória ao longo do tempo",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "instance:node_memory_used:percentage", "legendFormat": "RAM usada {{instance}}" }],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 15, "spanNulls": false, "pointSize": 5 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 12, "type": "timeseries", "title": "Disco por filesystem",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "instance:node_filesystem_used:percentage", "legendFormat": "{{mountpoint}}" }],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "spanNulls": false, "pointSize": 5 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 13, "type": "timeseries", "title": "Network I/O",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(node_network_receive_bytes_total{device!~\"lo|veth.*|docker.*|br-.*\"}[5m])) by (device)", "legendFormat": "rx {{device}}" },
+        { "refId": "B", "expr": "sum(rate(node_network_transmit_bytes_total{device!~\"lo|veth.*|docker.*|br-.*\"}[5m])) by (device)", "legendFormat": "tx {{device}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "spanNulls": false, "pointSize": 5 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 14, "type": "table", "title": "Containers com maior consumo de CPU",
+      "gridPos": { "x": 0, "y": 24, "w": 16, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "topk(5, container:cpu_usage:rate5m)", "format": "table", "instant": true }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 3 }, "overrides": [] },
+      "options": { "showHeader": true, "cellHeight": "sm" }
+    },
+    {
+      "id": 15, "type": "stat", "title": "Status geral (targets UP)",
+      "gridPos": { "x": 16, "y": 24, "w": 8, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(up) / count(up) * 100", "instant": true }],
+      "fieldConfig": { "defaults": { "unit": "percent", "decimals": 0, "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 90 }, { "color": "green", "value": 100 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "none", "justifyMode": "auto" }
+    }
+  ]
+}

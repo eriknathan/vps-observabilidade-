@@ -1,0 +1,76 @@
+// ============================================================================
+// Grafana Alloy — coleta e envio de logs para o Loki.
+//
+// Substitui o Promtail (deprecated pela Grafana Labs, LTS encerrado em
+// 2026-02-28, sem mais atualizações). Alloy é o coletor unificado
+// recomendado atualmente — ver README > "Promtail vs Alloy".
+//
+// O que é coletado:
+//   1. Logs de TODOS os containers Docker, lidos via socket do Docker
+//      (loki.source.docker) — não exige mudar o log-driver nem reiniciar
+//      as aplicações monitoradas.
+//   2. Logs do sistema operacional via systemd-journal (loki.source.journal),
+//      o que também cobre os logs do próprio dockerd.
+//
+// Cardinalidade de labels (ver README > Performance):
+//   O nível de log (info/warn/error) NÃO vira label — o Loki 3.x já extrai
+//   isso automaticamente como "detected_level" (structured metadata),
+//   filtrável no Explore/dashboards sem custo de cardinalidade. Os únicos
+//   labels usados são job, host, container, compose_service e image: todos
+//   de cardinalidade baixa e limitada pelo número de containers/imagens
+//   distintos, não pelo volume de linhas de log.
+// ============================================================================
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  // "/nome-do-container" -> "nome-do-container"
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  // Nome do serviço no docker-compose.yml de origem (quando aplicável).
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "compose_service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_image"]
+    target_label  = "image"
+  }
+
+  rule {
+    target_label = "host"
+    replacement  = env("VPS_HOSTNAME")
+  }
+}
+
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.containers.targets
+  labels        = {job = "docker"}
+  relabel_rules = discovery.relabel.containers.rules
+  forward_to    = [loki.write.default.receiver]
+}
+
+loki.source.journal "system" {
+  max_age = "12h"
+  labels = {
+    job  = "systemd-journal",
+    host = env("VPS_HOSTNAME"),
+  }
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

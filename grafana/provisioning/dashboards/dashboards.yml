@@ -1,0 +1,20 @@
+# Provider de dashboards via arquivo. Tudo que estiver em
+# grafana/dashboards/*.json é importado automaticamente na pasta
+# "Observability" assim que o Grafana sobe — nenhum import manual pela UI.
+apiVersion: 1
+
+providers:
+  - name: Observability
+    orgId: 1
+    folder: Observability
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    # allowUiUpdates: false força a origem da verdade a ser o JSON versionado
+    # no Git — qualquer alteração feita na UI é sobrescrita na próxima
+    # releitura, em vez de "vazar" estado manual para dentro do Grafana
+    # (Regra 1 — Infrastructure as Code).
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
