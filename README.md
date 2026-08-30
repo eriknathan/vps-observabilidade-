@@ -26,6 +26,7 @@ Stack de observabilidade 100% declarativa para uma VPS Ubuntu 24.04: **Grafana +
 20. [Atualização](#20-atualização)
 21. [Segurança](#21-segurança)
 22. [Troubleshooting](#22-troubleshooting)
+23. [Deploy automático via GitHub Actions](#23-deploy-automático-via-github-actions)
 
 ---
 
@@ -124,10 +125,11 @@ docker compose version   # confirma que o plugin v2 está presente
 │   ├── provisioning/
 │   │   ├── datasources/datasources.yml
 │   │   ├── dashboards/dashboards.yml
-│   │   └── alerting/
-│   │       ├── rules.yml
-│   │       ├── contact-points.yml
-│   │       └── notification-policies.yml
+│   │   ├── alerting/
+│   │   │   ├── rules.yml
+│   │   │   ├── contact-points.yml
+│   │   │   └── notification-policies.yml
+│   │   └── plugins/          # vazio de propósito, ver seção 11
 │   └── dashboards/
 │       ├── infrastructure-overview.json
 │       ├── host-metrics.json
@@ -139,7 +141,7 @@ docker compose version   # confirma que o plugin v2 está presente
     └── healthcheck.sh
 ```
 
-Sem `promtail/` (ver seção 16) e sem `grafana/config/`/`grafana/provisioning/plugins/` — o Grafana é configurado inteiramente via variáveis de ambiente no `docker-compose.yml` e o plugin de painel é instalado via `GF_INSTALL_PLUGINS` (provisioning de plugin em YAML é para *app plugins*, não para painéis).
+Sem `promtail/` (ver seção 16) e sem `grafana/config/` — o Grafana é configurado inteiramente via variáveis de ambiente no `docker-compose.yml`. `grafana/provisioning/plugins/` existe mas fica **vazio**: o Grafana sempre escaneia esse caminho no boot e loga erro se ele não existir, então o diretório está aqui só para isso não acontecer — o plugin de painel usado nesta stack é instalado via `GF_INSTALL_PLUGINS` (provisioning de plugin em YAML é para *app plugins*, não para painéis, então não temos nada real para colocar aí).
 
 ## 6. Configuração do .env
 
@@ -208,7 +210,7 @@ Confirmar que o plugin instalou: `docker compose logs grafana | grep -i plugin`.
 
 ## 12. Prometheus
 
-Config em `prometheus/prometheus.yml`. Scrape a cada 15s de: `prometheus` (self), `node-exporter`, `cadvisor`, `grafana` (meta-monitoramento), mais um job `file-sd-targets` que lê `prometheus/targets/*.json` — para adicionar uma nova VPS, aplicação ou exporter no futuro, basta criar um arquivo JSON nesse diretório seguindo `additional-targets.json.example`; o Prometheus recarrega sozinho (`refresh_interval: 1m`), sem restart.
+Config em `prometheus/prometheus.yml`. Scrape a cada 15s de: `prometheus` (self), `node-exporter`, `cadvisor`, `grafana` e `loki` (meta-monitoramento de ambos — o job `loki` também é o único jeito de saber se o Loki está de pé, ver [seção 15](#15-loki)), mais um job `file-sd-targets` que lê `prometheus/targets/*.json` — para adicionar uma nova VPS, aplicação ou exporter no futuro, basta criar um arquivo JSON nesse diretório seguindo `additional-targets.json.example`; o Prometheus recarrega sozinho (`refresh_interval: 1m`), sem restart.
 
 **Retenção**: `PROMETHEUS_RETENTION_DAYS` (padrão 15 dias) + `PROMETHEUS_RETENTION_SIZE` (padrão 5 GB) como teto de segurança — o que vier primeiro vence. Para VPS com pouco disco, reduza ambos no `.env`.
 
@@ -235,6 +237,14 @@ Container `cadvisor`, sem porta publicada. Volumes e por quê:
 
 Roda com `privileged: true` — necessário na prática para o cAdvisor enxergar métricas completas de cgroup v2/dispositivos nesta versão; é um trade-off de privilégio aceito **apenas dentro da rede interna** (o container não é exposto). Se ao validar na sua VPS específica o cAdvisor funcionar sem `privileged: true` (alguns kernels/configurações permitem), remova a flag — teste com `docker compose logs cadvisor` e confira se as métricas de memória/cgroup aparecem no dashboard Docker / Containers.
 
+**Sobre a imagem**: usamos `ghcr.io/google/cadvisor`, não `gcr.io/cadvisor/cadvisor` — a partir da v0.53.0 o projeto migrou de registry (o antigo `gcr.io/cadvisor/cadvisor` só tem tags até v0.55.1 e não recebe mais publicações). Além disso, **evite as versões v0.54.1 até v0.56.x**: há uma regressão conhecida e ainda aberta ([google/cadvisor#3772](https://github.com/google/cadvisor/issues/3772), [#3793](https://github.com/google/cadvisor/issues/3793)) em que o cliente Docker embutido no cAdvisor falha ao negociar a versão da API contra um Docker Engine mais novo — o "Docker factory" não registra, e as métricas ficam só com o label `id` (caminho cru do cgroup), sem `name`/`image`. O sintoma é exatamente o dashboard *Docker / Containers* inteiro em "No data" mesmo com `up{job="cadvisor"}` OK. Corrigido em v0.57.0 ([#3863](https://github.com/google/cadvisor/pull/3863)); esta stack usa v0.60.5.
+
+Se depois de atualizar a stack o dashboard Docker ainda mostrar "No data", confirme a causa diretamente:
+```bash
+docker compose exec prometheus wget -qO- 'http://cadvisor:8080/metrics' | grep '^container_last_seen{' | head -3
+```
+Se aparecer só `{id="..."}` sem `name=`, a imagem em uso está na faixa afetada pela regressão.
+
 Prometheus faz scrape de `cadvisor:8080/metrics`.
 
 ## 15. Loki
@@ -242,6 +252,8 @@ Prometheus faz scrape de `cadvisor:8080/metrics`.
 Config em `loki/loki-config.yml`: single-binary, `auth_enabled: false` (single tenant — só é alcançável na rede interna), storage em **filesystem** (sem S3/GCS), índice **TSDB v13** (o recomendado atualmente para esse tipo de deployment, substitui o boltdb-shipper legado). Compactor com retenção habilitada (`LOKI_RETENTION_DAYS`, padrão 14 dias). `limits_config` limita taxa de ingestão e streams por tenant para proteger a VPS de um container que passe a gerar volume anormal de log.
 
 Detecção automática de nível de log (`detected_level`) vem habilitada por padrão no Loki 3.1+ (`discover_log_levels`) — não precisa configurar nada; é isso que alimenta o filtro "Nível" do dashboard Logs Overview sem precisar transformar nível em label (ver seção 17).
+
+**Sobre o healthcheck do Loki**: a imagem oficial (`grafana/loki`) é construída sobre `gcr.io/distroless/static:nonroot` — não tem shell, `wget`, `curl` nem nada além do binário do Loki, então **não existe como rodar um healthcheck HTTP de dentro do container** (por isso não há `healthcheck:` no serviço `loki` do `docker-compose.yml`, ao contrário do que uma primeira versão deste projeto assumiu incorretamente). A saúde do Loki é verificada de duas formas externas: o job `loki` no Prometheus (`up{job="loki"}`) e `scripts/healthcheck.sh`, que sonda `http://loki:3100` a partir do container do Prometheus (que tem `wget`), via a rede Docker interna. Por esse mesmo motivo, `grafana` e `alloy` dependem de `loki` com `condition: service_started` (não `service_healthy`) no compose — ambos toleram bem o Loki ainda estar de boot (Grafana demora mais para inicializar do que o Loki leva pra responder; o `loki.write` do Alloy já tem retry/backoff embutido).
 
 ## 16. Alloy (Promtail vs. Alloy)
 
@@ -288,6 +300,8 @@ Contact points em `contact-points.yml`: um único contact point `equipe-ops` com
 2. Para e-mail, mude também `ALERT_SMTP_ENABLED=true`.
 3. `docker compose up -d` (recria só o Grafana, os outros containers não são afetados).
 
+**Importante se você for adicionar um novo canal/variável aqui**: `contact-points.yml` interpola `$ALERT_*` usando o ambiente do *processo do Grafana dentro do container*, não o `.env` do host diretamente. Isso só funciona porque cada `ALERT_*` também está listado no bloco `environment:` do serviço `grafana` no `docker-compose.yml` (com um default placeholder próprio, redundante com o do `.env.example` — dupla camada de segurança). Se uma variável nova existir só em `contact-points.yml` mas não estiver em `environment:` do Grafana, ela vira string vazia — e para o receiver de e-mail (`addresses`) isso não é "alerta desabilitado", é um **erro fatal de provisionamento que impede o Grafana de subir** (`could not find addresses in settings`). Ao adicionar uma variável de alerta nova, sempre atualize os dois arquivos juntos.
+
 `notification-policies.yml` roteia tudo para `equipe-ops`, com um caminho mais rápido (menor `group_wait`/`repeat_interval`) para alertas `severity: critical`.
 
 ## 19. Backup
@@ -323,6 +337,8 @@ Riscos antes de atualizar um componente crítico (Prometheus, Loki, Grafana):
 2. Rode `./scripts/backup.sh` antes.
 3. Atualize um serviço por vez quando possível (edite a tag da imagem no `docker-compose.yml`, não use `latest`) e valide com `scripts/healthcheck.sh` antes de seguir para o próximo.
 4. Loki em particular: mudanças de `schema_config` não são retroativas — novos schemas só valem a partir de uma nova entrada com `from:` futura, nunca edite uma entrada de schema já em uso.
+
+Se o [deploy automático via GitHub Actions](#23-deploy-automático-via-github-actions) estiver configurado, um `git push` na `main` já faz `pull` + `up -d` + healthcheck sozinho — os passos acima continuam valendo antes de fazer esse push (backup, ler release notes etc.), só o "aplicar" vira automático.
 
 ## 21. Segurança
 
@@ -376,6 +392,47 @@ docker compose logs grafana | grep -i "plugin"
 docker compose exec grafana grafana-cli plugins ls
 ```
 Se não aparecer, confirme `GF_INSTALL_PLUGINS=gapit-htmlgraphics-panel` no `docker-compose.yml` e que o container tem acesso à internet para baixar o plugin no primeiro boot.
+
+---
+
+## 23. Deploy automático via GitHub Actions
+
+`.github/workflows/deploy.yml` sincroniza este repositório com a VPS e sobe a stack automaticamente a cada `git push` na branch `main` (ou manualmente via **Actions → Deploy to VPS → Run workflow**).
+
+O que o workflow faz, em ordem: valida a presença do `docker-compose.yml` → valida a sintaxe do compose (usando `.env.example` só para satisfazer as variáveis obrigatórias — esse arquivo temporário nunca sai do runner) → valida o JSON de todos os dashboards → configura SSH com `known_hosts` fixo (sem `StrictHostKeyChecking=no` — conexão só é aceita se a VPS já for uma máquina conhecida) → testa a conexão → `rsync` do repositório para a VPS (excluindo `.env`, logs, backups e diretórios de dados) → escreve o `.env` de produção na VPS a partir de um secret (`umask 077`, nunca passa pelo Git/rsync) → `docker compose config && docker compose pull && docker compose up -d --remove-orphans` → roda **`scripts/healthcheck.sh` na própria VPS** como verificação final → remove a chave SSH do runner ao final (`if: always()`, mesmo se algo falhar antes).
+
+A última etapa reaproveita o `scripts/healthcheck.sh` deste repositório em vez de só rodar `docker compose ps` — assim, se algum serviço subir mas não ficar saudável (datasource quebrado, Loki não respondendo, target down no Prometheus), o job do GitHub Actions **falha de verdade**, em vez de aparecer verde com a stack degradada.
+
+### Secrets necessários (Settings → Secrets and variables → Actions)
+
+| Secret | Conteúdo |
+|---|---|
+| `VPS_HOST` | IP ou hostname da VPS |
+| `VPS_PORT` | Porta do SSH (normalmente `22`) |
+| `VPS_USER` | Usuário SSH de deploy (recomendado: um usuário dedicado, não root, no grupo `docker`) |
+| `VPS_DEPLOY_PATH` | Caminho absoluto na VPS onde o repositório vai viver (ex.: `/opt/vps-observabilidade`) |
+| `VPS_SSH_PRIVATE_KEY` | Chave privada SSH (par dedicado ao deploy, não sua chave pessoal) |
+| `VPS_KNOWN_HOSTS` | Saída de `ssh-keyscan -p <porta> <host>` rodado a partir de uma máquina confiável |
+| `PRODUCTION_ENV` | Conteúdo completo do `.env` de produção (mesmas chaves do `.env.example`, com valores reais) |
+
+Gerando a chave dedicada e o `known_hosts`:
+
+```bash
+ssh-keygen -t ed25519 -f deploy_key -C "github-actions-deploy" -N ""
+# cole o conteúdo de deploy_key.pub em ~/.ssh/authorized_keys do usuário de deploy na VPS
+# cole o conteúdo de deploy_key (privada) no secret VPS_SSH_PRIVATE_KEY
+
+ssh-keyscan -p 22 seu-ip-ou-host >> known_hosts_output
+# cole o conteúdo de known_hosts_output no secret VPS_KNOWN_HOSTS
+```
+
+### Sobre o `--delete` do rsync
+
+O `rsync` roda com `--delete`, ou seja, arquivos removidos do Git também somem da VPS no próximo deploy — isso é o que garante que a VPS reflita exatamente o repositório, mas é por isso que `.env`, `backups/`, `*.log` e os diretórios de dados estão explicitamente em `--exclude`. Como esta stack usa **volumes nomeados do Docker** (não bind mounts em `data/`, ver [seção 19](#19-backup)), o `--delete` não tem como atingir dados reais de Prometheus/Loki/Grafana — eles vivem fora da árvore sincronizada. Se você migrar para bind mounts no futuro, adicione o novo diretório à lista de `--exclude` antes de habilitar o workflow.
+
+### Sobre o `.env` de produção
+
+O `.env` nunca passa pelo Git nem pelo `rsync` (está em `--exclude`). Ele é escrito diretamente na VPS via SSH a partir do secret `PRODUCTION_ENV`, com `umask 077` (arquivo criado já com permissão `600`, ilegível para outros usuários). Isso mantém a regra de "nenhuma credencial no Git" mesmo com deploy automatizado.
 
 ---
 

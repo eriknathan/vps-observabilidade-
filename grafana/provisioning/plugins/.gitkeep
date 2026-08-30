@@ -1,0 +1,10 @@
+Diretório propositalmente vazio.
+
+O Grafana sempre escaneia /etc/grafana/provisioning/plugins no boot e loga
+um erro se ele não existir (mesmo sem nenhum uso previsto para app plugins
+nesta stack). Este arquivo só existe para o diretório ser versionado no Git
+(Git não versiona diretórios vazios) e para o Grafana parar de reclamar.
+
+O plugin de painel usado nesta stack (gapit-htmlgraphics-panel) é instalado
+via GF_INSTALL_PLUGINS no docker-compose.yml, não por provisioning aqui —
+esse mecanismo é para *app plugins*, não para panel plugins. Ver README > Plugins.

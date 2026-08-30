@@ -59,6 +59,20 @@ scrape_configs:
       - targets: ["grafana:3000"]
 
   # --------------------------------------------------------------------------
+  # Métricas internas do Loki. Também serve como sinal de saúde externo do
+  # Loki: a imagem é distroless (sem shell/wget/curl — ver docker-compose.yml
+  # > loki), então não dá pra rodar um healthcheck HTTP de dentro do
+  # container; `up{job="loki"}` é como sabemos que ele está de pé.
+  # --------------------------------------------------------------------------
+  - job_name: loki
+    metrics_path: /metrics
+    relabel_configs:
+      - target_label: host
+        replacement: vps-01
+    static_configs:
+      - targets: ["loki:3100"]
+
+  # --------------------------------------------------------------------------
   # Targets adicionais (outras VPS, aplicações, APIs, exporters futuros).
   # Basta criar um arquivo *.json em prometheus/targets/ seguindo o modelo
   # de additional-targets.json.example — o Prometheus recarrega sozinho

@@ -1,0 +1,225 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+env:
+  DEPLOY_PATH: ${{ secrets.VPS_DEPLOY_PATH }}
+
+jobs:
+  deploy:
+    name: Deploy to Production VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+
+      # ============================================================
+      # 1. Checkout
+      # ============================================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # 2. Validar estrutura
+      # ============================================================
+      - name: Validate repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "======================================"
+          echo " Validating repository"
+          echo "======================================"
+
+          test -f docker-compose.yml
+
+          echo "✓ docker-compose.yml found"
+
+      # ============================================================
+      # 3. Validar docker-compose.yml (sintaxe real, não só presença)
+      #
+      # docker-compose.yml exige variáveis obrigatórias (ex.:
+      # GRAFANA_ADMIN_PASSWORD via ${VAR:?...}) que só existem no .env
+      # real da VPS. Aqui no runner usamos .env.example só para
+      # satisfazer essa checagem de sintaxe — ele nunca é enviado à VPS
+      # (é excluído do rsync mais abaixo; o .env de produção vem do
+      # secret PRODUCTION_ENV no passo 9).
+      # ============================================================
+      - name: Validate docker-compose.yml syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cp .env.example .env
+          docker compose config > /dev/null
+          rm -f .env
+          echo "✓ docker-compose.yml is syntactically valid"
+
+      # ============================================================
+      # 4. Validar JSON dos dashboards
+      # ============================================================
+      - name: Validate Grafana dashboards
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -d "grafana/dashboards" ]; then
+            echo "Validating Grafana dashboards..."
+
+            find grafana/dashboards -type f -name "*.json" -print0 |
+              while IFS= read -r -d '' file; do
+                python3 -m json.tool "$file" > /dev/null
+                echo "✓ $file"
+              done
+          else
+            echo "No Grafana dashboards directory found."
+          fi
+
+      # ============================================================
+      # 5. Configurar SSH
+      # ============================================================
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "${{ secrets.VPS_SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+
+          chmod 600 ~/.ssh/deploy_key
+
+          printf '%s\n' "${{ secrets.VPS_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+          chmod 644 ~/.ssh/known_hosts
+
+          echo "✓ SSH configured"
+
+      # ============================================================
+      # 6. Testar conexão SSH
+      # ============================================================
+      - name: Test SSH connection
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ssh \
+            -i ~/.ssh/deploy_key \
+            -p "${{ secrets.VPS_PORT }}" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=10 \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "echo 'SSH connection successful'"
+
+      # ============================================================
+      # 7. Preparar diretório da VPS
+      # ============================================================
+      - name: Prepare VPS
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ssh \
+            -i ~/.ssh/deploy_key \
+            -p "${{ secrets.VPS_PORT }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "mkdir -p '${DEPLOY_PATH}'"
+
+      # ============================================================
+      # 8. Sincronizar código
+      # ============================================================
+      - name: Sync project to VPS
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rsync \
+            -az \
+            --delete \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='.env' \
+            --exclude='*.log' \
+            --exclude='backups/' \
+            --exclude='data/' \
+            --exclude='prometheus/data/' \
+            --exclude='grafana/data/' \
+            --exclude='loki/data/' \
+            -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT }}" \
+            ./ \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${DEPLOY_PATH}/"
+
+      # ============================================================
+      # 9. Criar/atualizar .env
+      # ============================================================
+      - name: Configure production environment
+        shell: bash
+        env:
+          PRODUCTION_ENV: ${{ secrets.PRODUCTION_ENV }}
+        run: |
+          set -euo pipefail
+
+          printf '%s\n' "$PRODUCTION_ENV" |
+            ssh \
+              -i ~/.ssh/deploy_key \
+              -p "${{ secrets.VPS_PORT }}" \
+              "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+              "umask 077 && cat > '${DEPLOY_PATH}/.env'"
+
+      # ============================================================
+      # 10. Deploy
+      # ============================================================
+      - name: Deploy stack
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ssh \
+            -i ~/.ssh/deploy_key \
+            -p "${{ secrets.VPS_PORT }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "cd '${DEPLOY_PATH}' && \
+             docker compose config > /dev/null && \
+             docker compose pull && \
+             docker compose up -d --remove-orphans"
+
+      # ============================================================
+      # 11. Health check
+      #
+      # Reaproveita scripts/healthcheck.sh (já testado e versionado no
+      # repo) em vez de só rodar `docker compose ps` — assim, se algum
+      # serviço não sobe saudável, o job falha de verdade (exit != 0) e
+      # o deploy não fica "verde" por engano.
+      # ============================================================
+      - name: Health check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ssh \
+            -i ~/.ssh/deploy_key \
+            -p "${{ secrets.VPS_PORT }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "cd '${DEPLOY_PATH}' && chmod +x scripts/healthcheck.sh && ./scripts/healthcheck.sh"
+
+      # ============================================================
+      # 12. Limpeza
+      # ============================================================
+      - name: Cleanup SSH key
+        if: always()
+        shell: bash
+        run: |
+          rm -f ~/.ssh/deploy_key

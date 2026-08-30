@@ -34,8 +34,13 @@ services:
     depends_on:
       prometheus:
         condition: service_healthy
+      # Loki não tem healthcheck neste compose (ver comentário no serviço
+      # loki abaixo — a imagem é distroless, sem shell) então só podemos
+      # esperar o container iniciar, não "ficar saudável". Na prática não
+      # é um problema: o Grafana demora mais para inicializar (plugins,
+      # migrações) do que o Loki leva para responder (~1s nos logs).
       loki:
-        condition: service_healthy
+        condition: service_started
     ports:
       - "${GRAFANA_PORT:-3000}:3000"
     environment:
@@ -57,13 +62,31 @@ services:
       GF_SMTP_USER: ${ALERT_SMTP_USER:-}
       GF_SMTP_PASSWORD: ${ALERT_SMTP_PASSWORD:-}
       GF_SMTP_FROM_ADDRESS: ${ALERT_SMTP_FROM_ADDRESS:-alerts@example.com}
+      # grafana/provisioning/alerting/contact-points.yml interpola
+      # $ALERT_* diretamente (sintaxe própria do provisioning de alerting do
+      # Grafana, não a mesma coisa que os GF_SMTP_* acima). Essas variáveis
+      # só existem para essa interpolação se estiverem aqui no environment
+      # do container — sem isso o Grafana lê string vazia, o receiver de
+      # e-mail fica sem endereço, a validação falha e o Grafana CRASHA no
+      # boot (não é só "alerta desabilitado", é fatal). Os defaults abaixo
+      # replicam os placeholders do .env.example como segunda camada de
+      # segurança, caso o .env do usuário não defina alguma dessas chaves.
+      ALERT_SMTP_FROM_ADDRESS: ${ALERT_SMTP_FROM_ADDRESS:-alerts@example.com}
+      ALERT_SLACK_WEBHOOK_URL: ${ALERT_SLACK_WEBHOOK_URL:-https://hooks.slack.com/services/CHANGE/ME/NOW}
+      ALERT_DISCORD_WEBHOOK_URL: ${ALERT_DISCORD_WEBHOOK_URL:-https://discord.com/api/webhooks/CHANGE/ME}
+      ALERT_TELEGRAM_BOT_TOKEN: ${ALERT_TELEGRAM_BOT_TOKEN:-CHANGE_ME}
+      ALERT_TELEGRAM_CHAT_ID: ${ALERT_TELEGRAM_CHAT_ID:-CHANGE_ME}
+      ALERT_GENERIC_WEBHOOK_URL: ${ALERT_GENERIC_WEBHOOK_URL:-https://example.com/change-me}
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     networks: [monitoring]
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      # A imagem oficial instala curl explicitamente (via apk); wget só
+      # existiria "de brinde" via busybox do Alpine, então preferimos curl
+      # por ser garantido pelo próprio Dockerfile da imagem.
+      test: ["CMD-SHELL", "curl -f -s -o /dev/null http://localhost:3000/api/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -121,12 +144,13 @@ services:
       - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
       - loki_data:/loki
     networks: [monitoring]
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:3100/ready || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
+    # Sem healthcheck: a imagem oficial (grafana/loki) é construída sobre
+    # gcr.io/distroless/static:nonroot — não tem shell, wget, curl nem
+    # nada além do binário do Loki. Não existe como rodar uma checagem
+    # HTTP de dentro do container. A saúde real do Loki é verificada de
+    # fora: pelo job `loki` no Prometheus (ver prometheus.yml, alimenta
+    # `up{job="loki"}`) e por scripts/healthcheck.sh (que sonda
+    # http://loki:3100 a partir do container do Prometheus, via wget).
     mem_limit: ${LOKI_MEM_LIMIT:-512m}
 
   # ----------------------------------------------------------------------------
@@ -138,8 +162,11 @@ services:
     image: grafana/alloy:v1.19.2
     restart: unless-stopped
     depends_on:
+      # Loki não tem healthcheck (ver serviço loki) — só dá para esperar o
+      # container iniciar. loki.write do Alloy já tem retry/backoff embutido,
+      # então uma tentativa de push antes do Loki responder não é um problema.
       loki:
-        condition: service_healthy
+        condition: service_started
     command:
       - run
       # UI/API de debug do Alloy fica só em loopback DENTRO do container —
@@ -164,9 +191,20 @@ services:
 
   # ----------------------------------------------------------------------------
   # cAdvisor — métricas por container (CPU, memória, rede, disco).
+  #
+  # Imagem em ghcr.io/google/cadvisor, não gcr.io/cadvisor/cadvisor: a partir
+  # da v0.53.0 o cAdvisor migrou de registry (gcr.io/cadvisor só tem tags até
+  # v0.55.1 — não recebe mais publicações). Além disso, versões v0.54.1 até
+  # v0.56.x têm uma regressão conhecida (google/cadvisor#3772 e #3793): o
+  # cliente Docker embutido não negocia a versão da API do Docker Engine
+  # corretamente, o "Docker factory" falha silenciosamente, e as métricas
+  # ficam só com o label `id` (caminho do cgroup) — sem `name`/`image`, o que
+  # deixa o dashboard "Docker / Containers" inteiro sem dados. Corrigido na
+  # v0.57.0 (google/cadvisor#3863). Pinado em v0.60.5 (a mais recente no
+  # momento), bem acima da correção.
   # ----------------------------------------------------------------------------
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.55.1
+    image: ghcr.io/google/cadvisor:v0.60.5
     restart: unless-stopped
     # cgroup v2 (padrão no Ubuntu 24.04) exige acesso amplo a /sys e aos
     # devices do host para relatar métricas completas de containers e disco.
