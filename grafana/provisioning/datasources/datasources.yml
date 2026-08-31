@@ -25,7 +25,7 @@ datasources:
       maxLines: 1000
       # Correlação: um clique num log com um trace/estrutura numérica não é
       # usado aqui (não há tracing na stack). A navegação métricas -> logs é
-      # feita via data links nos próprios painéis dos dashboards (ver
-      # docker-containers.json e logs-overview.json), filtrando por
-      # `container` — mais direto que derivedFields para este caso de uso.
+      # simplesmente rolar até a linha "Logs" do dashboard Observability
+      # (observability.json) e filtrar por `logs_container` — como tudo vive
+      # num único dashboard, não há necessidade de data links entre painéis.
     editable: false

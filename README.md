@@ -131,10 +131,7 @@ docker compose version   # confirma que o plugin v2 está presente
 │   │   │   └── notification-policies.yml
 │   │   └── plugins/          # vazio de propósito, ver seção 11
 │   └── dashboards/
-│       ├── infrastructure-overview.json
-│       ├── host-metrics.json
-│       ├── docker-containers.json
-│       └── logs-overview.json
+│       └── observability.json
 └── scripts/
     ├── install.sh
     ├── backup.sh
@@ -189,22 +186,35 @@ Nada a configurar em Connections > Data Sources — eles já existem no primeiro
 
 ## 10. Dashboards
 
-Importados automaticamente na pasta **Observability** a partir de `grafana/dashboards/*.json` (provider em `grafana/provisioning/dashboards/dashboards.yml`, com `allowUiUpdates: false` — mudanças na UI não persistem, o JSON no Git é a fonte da verdade):
+Importado automaticamente na pasta **Observability** a partir de `grafana/dashboards/observability.json` (provider em `grafana/provisioning/dashboards/dashboards.yml`, com `allowUiUpdates: false` — mudanças na UI não persistem, o JSON no Git é a fonte da verdade).
 
-- **Infrastructure Overview** — landing page: cards de CPU/RAM/Swap/Disk/Network/Load/Uptime/Containers, banner HTML Graphics de status, tendências e Top containers.
-- **Host Metrics** — detalhamento completo do Node Exporter (CPU por modo, load average, RAM, swap, disco por filesystem, I/O de disco, rede, processos).
-- **Docker / Containers** — cAdvisor, com variáveis `hostname`/`image`/`container`, overview + seções de CPU/memória/rede/disco com Top 10.
-- **Logs Overview** — Loki, variáveis `hostname`/`container`/`compose_service`/`level` + busca textual, volume por nível, painel de logs e painel dedicado a erros recentes.
+Um único dashboard, **Observability**, organizado em uma linha fixa + três linhas colapsáveis (evita carregar todos os ~54 painéis de uma vez — as linhas colapsadas só disparam suas queries quando expandidas):
 
-Navegação métricas → logs: o dashboard *Docker / Containers* tem um link no cabeçalho ("🔍 Ver logs destes containers") que abre o *Logs Overview* já filtrado pelo host/container selecionados, preservando o intervalo de tempo.
+- **Infrastructure Overview** (linha sempre expandida, topo do dashboard) — landing page: banner HTML Graphics "VPS Status" com anéis de CPU/RAM/Disk/Swap e badge de saúde de 3 estados, cards nativos de CPU/RAM/Swap/Disk/Network/Load/Uptime/Containers, tendências e Top containers. Responde "minha VPS está saudável?" sem precisar expandir nada.
+- **Host Metrics** (linha colapsável, cabeçalho HTML Graphics com cores/load/uptime/processos) — detalhamento completo do Node Exporter (CPU por modo, load average, RAM, swap, disco por filesystem, I/O de disco, rede, processos).
+- **Docker / Containers** (linha colapsável, cabeçalho HTML Graphics com totais de containers/imagens/CPU/memória/rede) — cAdvisor, com variáveis `docker_hostname`/`docker_image`/`docker_container`, overview + seções de CPU/memória/rede/disco com Top 10.
+- **Logs** (linha colapsável, cabeçalho HTML Graphics com contagem de erros/warnings e badge de saúde) — Loki, variáveis `logs_hostname`/`logs_container`/`logs_service`/`level` + busca textual, volume por nível, painel de logs e painel dedicado a erros recentes.
 
-Para editar um dashboard: edite o JSON, `docker compose restart grafana` (ou aguarde o `updateIntervalSeconds: 30` do provider recarregar sozinho) — não edite pela UI, a mudança seria descartada.
+As variáveis de template têm prefixo por seção (`docker_*` vs `logs_*`) porque, embora ambas descrevam os mesmos containers, uma consulta o Prometheus e a outra o Loki — mecanismos de `label_values` diferentes, então precisam de nomes próprios para não colidir num único dashboard.
+
+Navegação métricas → logs: como as duas seções agora vivem na mesma página, é só rolar até a linha **Logs** e expandi-la — os filtros `logs_hostname`/`logs_container` ficam lado a lado com os da linha **Docker / Containers**.
+
+Para editar o dashboard: edite `observability.json`, `docker compose restart grafana` (ou aguarde o `updateIntervalSeconds: 30` do provider recarregar sozinho) — não edite pela UI, a mudança seria descartada.
 
 ## 11. Plugins
 
 O plugin **HTML Graphics** (`gapit-htmlgraphics-panel`, catálogo oficial do Grafana, compatível com Grafana ≥ 8.2, versão atual instalada 2.2.3) é instalado automaticamente no boot via `GF_INSTALL_PLUGINS=gapit-htmlgraphics-panel` no `docker-compose.yml` — sem passo manual.
 
-`GF_PANELS_DISABLE_SANITIZE_HTML=true` também está setado, necessário para o plugin renderizar HTML/CSS/JS customizado. Isso desabilita a sanitização de HTML nos painéis — um trade-off de segurança aceitável aqui porque o único HTML renderizado é o que **nós mesmos** escrevemos e versionamos nos dashboards JSON (não há input de usuário externo passando por esse caminho). Ver o painel de status em `infrastructure-overview.json` como exemplo de uso comedido do plugin (spec pede para evitar HTML Graphics quando um painel nativo resolve — por isso ele é usado só como banner decorativo, e os números "de verdade" estão em Stat panels nativos logo abaixo).
+`GF_PANELS_DISABLE_SANITIZE_HTML=true` também está setado, necessário para o plugin renderizar HTML/CSS/JS customizado. Isso desabilita a sanitização de HTML nos painéis — um trade-off de segurança aceitável aqui porque o único HTML renderizado é o que **nós mesmos** escrevemos e versionamos nos dashboards JSON (não há input de usuário externo passando por esse caminho).
+
+`observability.json` usa o plugin em quatro painéis, um por seção — todos puramente decorativos/resumo, nunca a única fonte de um número (a spec pede para evitar HTML Graphics quando um painel nativo resolve; aqui cada valor mostrado no HTML também existe em algum Stat/Table nativo logo abaixo, então uma falha de renderização do plugin nunca esconde dado real):
+
+- **VPS Status** (topo, linha Infrastructure Overview) — banner com 4 medidores em anel SVG (CPU/RAM/Disk/Swap, cor por threshold), badge de saúde de 3 estados (HEALTHY/ATTENTION/CRITICAL) e chips de Load/Uptime/Containers.
+- **🖥️ Host Metrics** (cabeçalho da linha) — chips de cores de CPU, load normalizado por core, uptime formatado (`Xd Xh`) e processos (destaca processos bloqueados em laranja).
+- **🐳 Docker / Containers** (cabeçalho da linha) — chips de containers ativos, imagens distintas, CPU/memória/rede totais (já respeitando as variáveis `docker_*` selecionadas).
+- **📜 Logs** (cabeçalho da linha) — contagem de linhas/erros/warnings do intervalo e badge de saúde (OK/ATENÇÃO/N ERROS), já respeitando as variáveis `logs_*` selecionadas.
+
+Cada painel lê os valores via `targets` normais (PromQL/LogQL com `instant: true`) e só usa `onRender` para formatar/colorir o que a UI nativa do Grafana não faz sozinha (anéis SVG, formatação humana de bytes/uptime, badges com 3 estados) — nenhum dado é calculado no JavaScript, só exibido.
 
 Confirmar que o plugin instalou: `docker compose logs grafana | grep -i plugin`.
 
@@ -235,9 +245,9 @@ Container `cadvisor`, sem porta publicada. Volumes e por quê:
 | `/dev/disk:/dev/disk:ro` | Mapeamento de dispositivos de disco |
 | device `/dev/kmsg` | Leitura de mensagens do kernel usadas por alguns coletores |
 
-Roda com `privileged: true` — necessário na prática para o cAdvisor enxergar métricas completas de cgroup v2/dispositivos nesta versão; é um trade-off de privilégio aceito **apenas dentro da rede interna** (o container não é exposto). Se ao validar na sua VPS específica o cAdvisor funcionar sem `privileged: true` (alguns kernels/configurações permitem), remova a flag — teste com `docker compose logs cadvisor` e confira se as métricas de memória/cgroup aparecem no dashboard Docker / Containers.
+Roda com `privileged: true` — necessário na prática para o cAdvisor enxergar métricas completas de cgroup v2/dispositivos nesta versão; é um trade-off de privilégio aceito **apenas dentro da rede interna** (o container não é exposto). Se ao validar na sua VPS específica o cAdvisor funcionar sem `privileged: true` (alguns kernels/configurações permitem), remova a flag — teste com `docker compose logs cadvisor` e confira se as métricas de memória/cgroup aparecem na linha Docker / Containers do dashboard Observability.
 
-**Sobre a imagem**: usamos `ghcr.io/google/cadvisor`, não `gcr.io/cadvisor/cadvisor` — a partir da v0.53.0 o projeto migrou de registry (o antigo `gcr.io/cadvisor/cadvisor` só tem tags até v0.55.1 e não recebe mais publicações). Além disso, **evite as versões v0.54.1 até v0.56.x**: há uma regressão conhecida e ainda aberta ([google/cadvisor#3772](https://github.com/google/cadvisor/issues/3772), [#3793](https://github.com/google/cadvisor/issues/3793)) em que o cliente Docker embutido no cAdvisor falha ao negociar a versão da API contra um Docker Engine mais novo — o "Docker factory" não registra, e as métricas ficam só com o label `id` (caminho cru do cgroup), sem `name`/`image`. O sintoma é exatamente o dashboard *Docker / Containers* inteiro em "No data" mesmo com `up{job="cadvisor"}` OK. Corrigido em v0.57.0 ([#3863](https://github.com/google/cadvisor/pull/3863)); esta stack usa v0.60.5.
+**Sobre a imagem**: usamos `ghcr.io/google/cadvisor`, não `gcr.io/cadvisor/cadvisor` — a partir da v0.53.0 o projeto migrou de registry (o antigo `gcr.io/cadvisor/cadvisor` só tem tags até v0.55.1 e não recebe mais publicações). Além disso, **evite as versões v0.54.1 até v0.56.x**: há uma regressão conhecida e ainda aberta ([google/cadvisor#3772](https://github.com/google/cadvisor/issues/3772), [#3793](https://github.com/google/cadvisor/issues/3793)) em que o cliente Docker embutido no cAdvisor falha ao negociar a versão da API contra um Docker Engine mais novo — o "Docker factory" não registra, e as métricas ficam só com o label `id` (caminho cru do cgroup), sem `name`/`image`. O sintoma é exatamente a linha *Docker / Containers* inteira em "No data" mesmo com `up{job="cadvisor"}` OK. Corrigido em v0.57.0 ([#3863](https://github.com/google/cadvisor/pull/3863)); esta stack usa v0.60.5.
 
 Se depois de atualizar a stack o dashboard Docker ainda mostrar "No data", confirme a causa diretamente:
 ```bash
@@ -251,7 +261,7 @@ Prometheus faz scrape de `cadvisor:8080/metrics`.
 
 Config em `loki/loki-config.yml`: single-binary, `auth_enabled: false` (single tenant — só é alcançável na rede interna), storage em **filesystem** (sem S3/GCS), índice **TSDB v13** (o recomendado atualmente para esse tipo de deployment, substitui o boltdb-shipper legado). Compactor com retenção habilitada (`LOKI_RETENTION_DAYS`, padrão 14 dias). `limits_config` limita taxa de ingestão e streams por tenant para proteger a VPS de um container que passe a gerar volume anormal de log.
 
-Detecção automática de nível de log (`detected_level`) vem habilitada por padrão no Loki 3.1+ (`discover_log_levels`) — não precisa configurar nada; é isso que alimenta o filtro "Nível" do dashboard Logs Overview sem precisar transformar nível em label (ver seção 17).
+Detecção automática de nível de log (`detected_level`) vem habilitada por padrão no Loki 3.1+ (`discover_log_levels`) — não precisa configurar nada; é isso que alimenta o filtro "Nível" da linha Logs sem precisar transformar nível em label (ver seção 17).
 
 **Sobre o healthcheck do Loki**: a imagem oficial (`grafana/loki`) é construída sobre `gcr.io/distroless/static:nonroot` — não tem shell, `wget`, `curl` nem nada além do binário do Loki, então **não existe como rodar um healthcheck HTTP de dentro do container** (por isso não há `healthcheck:` no serviço `loki` do `docker-compose.yml`, ao contrário do que uma primeira versão deste projeto assumiu incorretamente). A saúde do Loki é verificada de duas formas externas: o job `loki` no Prometheus (`up{job="loki"}`) e `scripts/healthcheck.sh`, que sonda `http://loki:3100` a partir do container do Prometheus (que tem `wget`), via a rede Docker interna. Por esse mesmo motivo, `grafana` e `alloy` dependem de `loki` com `condition: service_started` (não `service_healthy`) no compose — ambos toleram bem o Loki ainda estar de boot (Grafana demora mais para inicializar do que o Loki leva pra responder; o `loki.write` do Alloy já tem retry/backoff embutido).
 

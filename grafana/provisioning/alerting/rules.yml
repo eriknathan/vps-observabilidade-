@@ -68,7 +68,7 @@ groups:
           severity: warning
         annotations:
           summary: "CPU do host {{ $labels.instance }} acima de 85% por mais de 10 minutos"
-          description: "Verifique quais processos/containers estão consumindo CPU no dashboard Docker / Containers."
+          description: "Verifique quais processos/containers estão consumindo CPU na linha Docker / Containers do dashboard Observability."
         data:
           - refId: A
             relativeTimeRange: { from: 600, to: 0 }
@@ -212,7 +212,7 @@ groups:
           severity: warning
         annotations:
           summary: "Container {{ $labels.name }} reiniciou mais de 2 vezes nos últimos 15 minutos"
-          description: "Possível crash loop — veja os logs do container no dashboard Logs Overview."
+          description: "Possível crash loop — veja os logs do container na linha Logs do dashboard Observability."
         data:
           - refId: A
             relativeTimeRange: { from: 900, to: 0 }
