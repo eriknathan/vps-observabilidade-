@@ -131,7 +131,10 @@ docker compose version   # confirma que o plugin v2 está presente
 │   │   │   └── notification-policies.yml
 │   │   └── plugins/          # vazio de propósito, ver seção 11
 │   └── dashboards/
-│       └── observability.json
+│       ├── infrastructure-overview-html.json
+│       ├── host-metrics-html.json
+│       ├── docker-containers-html.json
+│       └── logs-overview-html.json
 └── scripts/
     ├── install.sh
     ├── backup.sh
@@ -186,20 +189,31 @@ Nada a configurar em Connections > Data Sources — eles já existem no primeiro
 
 ## 10. Dashboards
 
-Importado automaticamente na pasta **Observability** a partir de `grafana/dashboards/observability.json` (provider em `grafana/provisioning/dashboards/dashboards.yml`, com `allowUiUpdates: false` — mudanças na UI não persistem, o JSON no Git é a fonte da verdade).
+Importados automaticamente na pasta **Observability** a partir de `grafana/dashboards/*.json` (provider em `grafana/provisioning/dashboards/dashboards.yml`, com `allowUiUpdates: false` — mudanças na UI não persistem, o JSON no Git é a fonte da verdade).
 
-Um único dashboard, **Observability**, organizado em uma linha fixa + três linhas colapsáveis (evita carregar todos os ~54 painéis de uma vez — as linhas colapsadas só disparam suas queries quando expandidas):
+Quatro dashboards standalone, cada um com um visual NOC escuro (fundo quase preto, acentos neon por métrica) construído inteiramente com o plugin HTML Graphics — sem depender de painéis nativos do Grafana para os números principais:
 
-- **Infrastructure Overview** (linha sempre expandida, topo do dashboard) — landing page: banner HTML Graphics "VPS Status" com anéis de CPU/RAM/Disk/Swap e badge de saúde de 3 estados, cards nativos de CPU/RAM/Swap/Disk/Network/Load/Uptime/Containers, tendências e Top containers. Responde "minha VPS está saudável?" sem precisar expandir nada.
-- **Host Metrics** (linha colapsável, cabeçalho HTML Graphics com cores/load/uptime/processos) — detalhamento completo do Node Exporter (CPU por modo, load average, RAM, swap, disco por filesystem, I/O de disco, rede, processos).
-- **Docker / Containers** (linha colapsável, cabeçalho HTML Graphics com totais de containers/imagens/CPU/memória/rede) — cAdvisor, com variáveis `docker_hostname`/`docker_image`/`docker_container`, overview + seções de CPU/memória/rede/disco com Top 10.
-- **Logs** (linha colapsável, cabeçalho HTML Graphics com contagem de erros/warnings e badge de saúde) — Loki, variáveis `logs_hostname`/`logs_container`/`logs_service`/`level` + busca textual, volume por nível, painel de logs e painel dedicado a erros recentes.
+- **Infrastructure Overview** — landing page da stack: header com badge de saúde geral (SAUDÁVEL/ATENÇÃO/CRÍTICO calculado a partir de CPU/memória/disco/alvos), 8 mini-cards (CPU/RAM/Swap/Disk/Network/Load/Uptime/Containers), séries temporais de CPU/memória/disco/rede e um painel de status dos alvos do Prometheus (`up`). Responde "minha VPS está saudável?" de cara.
+- **Host Metrics** — detalhamento completo do Node Exporter: cards de CPU/Memória/Armazenamento/Rede com sparkline e delta, carga do sistema (CPU por modo empilhado + load average), composição de memória (donut + swap), filesystems, latência de disco, tráfego por interface e um painel de **Problemas ativos** que busca em tempo real o estado das regras de alerta do Grafana (`/api/prometheus/grafana/api/v1/rules`) — não uma reimplementação paralela dos thresholds.
+- **Docker / Containers** — cAdvisor, com variáveis `hostname`/`image`/`container`: overview (containers ativos, imagens, CPU/memória/rede/disco totais), séries por container de CPU/memória/rede/disco, Top 10 de cada recurso e memória usada vs. limite.
+- **Logs Overview** — Loki, variáveis `hostname`/`container`/`compose_service`/`level`/`search`: contadores de linhas/erros/warnings do intervalo, volume de logs por nível, visualizador de logs com busca textual e um painel dedicado a erros recentes.
 
-As variáveis de template têm prefixo por seção (`docker_*` vs `logs_*`) porque, embora ambas descrevam os mesmos containers, uma consulta o Prometheus e a outra o Loki — mecanismos de `label_values` diferentes, então precisam de nomes próprios para não colidir num único dashboard.
+Para editar qualquer um: altere o `.json` correspondente em `grafana/dashboards/`, depois `docker compose restart grafana` (ou aguarde o `updateIntervalSeconds: 30` do provider recarregar sozinho) — não edite pela UI, a mudança seria descartada.
 
-Navegação métricas → logs: como as duas seções agora vivem na mesma página, é só rolar até a linha **Logs** e expandi-la — os filtros `logs_hostname`/`logs_container` ficam lado a lado com os da linha **Docker / Containers**.
+### Variáveis de template no Loki: use a query estruturada, não a string legada
 
-Para editar o dashboard: edite `observability.json`, `docker compose restart grafana` (ou aguarde o `updateIntervalSeconds: 30` do provider recarregar sozinho) — não edite pela UI, a mudança seria descartada.
+Se for criar ou editar uma variável do tipo Query com datasource Loki, **não** use a sintaxe de string `label_values(seletor, label)` — o editor de variáveis do Grafana atual não reconhece esse formato de 2 argumentos de forma confiável (ele aceita silenciosamente e cai num estado inválido, sem erro visível) e a variável acaba resolvendo para um único valor incorreto, fazendo `$variavel` (com "All" selecionado) não casar com nenhuma série real. Use o objeto estruturado:
+
+```json
+"query": {
+  "label": "container",
+  "stream": "{job=~\"docker|systemd-journal\", host=~\"$hostname\"}",
+  "type": 1,
+  "refId": "container"
+}
+```
+
+(`type: 1` = Label values, `type: 0` = Label names; omita `stream` para listar valores sem filtro.) Além disso, o `stream` **precisa** conter pelo menos um matcher que não seja compatível com string vazia — o LogQL rejeita um seletor onde *todos* os matchers casam com `""` (é exatamente o que `host=~"$hostname"` vira quando "All" expande para `.*`). Por isso o seletor acima sempre inclui `job=~"docker|systemd-journal"` junto com `host`, mesmo que o painel de destino já filtre por host sozinho.
 
 ## 11. Plugins
 
@@ -207,14 +221,7 @@ O plugin **HTML Graphics** (`gapit-htmlgraphics-panel`, catálogo oficial do Gra
 
 `GF_PANELS_DISABLE_SANITIZE_HTML=true` também está setado, necessário para o plugin renderizar HTML/CSS/JS customizado. Isso desabilita a sanitização de HTML nos painéis — um trade-off de segurança aceitável aqui porque o único HTML renderizado é o que **nós mesmos** escrevemos e versionamos nos dashboards JSON (não há input de usuário externo passando por esse caminho).
 
-`observability.json` usa o plugin em quatro painéis, um por seção — todos puramente decorativos/resumo, nunca a única fonte de um número (a spec pede para evitar HTML Graphics quando um painel nativo resolve; aqui cada valor mostrado no HTML também existe em algum Stat/Table nativo logo abaixo, então uma falha de renderização do plugin nunca esconde dado real):
-
-- **VPS Status** (topo, linha Infrastructure Overview) — banner com 4 medidores em anel SVG (CPU/RAM/Disk/Swap, cor por threshold), badge de saúde de 3 estados (HEALTHY/ATTENTION/CRITICAL) e chips de Load/Uptime/Containers.
-- **🖥️ Host Metrics** (cabeçalho da linha) — chips de cores de CPU, load normalizado por core, uptime formatado (`Xd Xh`) e processos (destaca processos bloqueados em laranja).
-- **🐳 Docker / Containers** (cabeçalho da linha) — chips de containers ativos, imagens distintas, CPU/memória/rede totais (já respeitando as variáveis `docker_*` selecionadas).
-- **📜 Logs** (cabeçalho da linha) — contagem de linhas/erros/warnings do intervalo e badge de saúde (OK/ATENÇÃO/N ERROS), já respeitando as variáveis `logs_*` selecionadas.
-
-Cada painel lê os valores via `targets` normais (PromQL/LogQL com `instant: true`) e só usa `onRender` para formatar/colorir o que a UI nativa do Grafana não faz sozinha (anéis SVG, formatação humana de bytes/uptime, badges com 3 estados) — nenhum dado é calculado no JavaScript, só exibido.
+Os quatro dashboards usam o plugin extensivamente (não só em cabeçalhos decorativos): cards de estatística, gráficos de série temporal com tooltip, donuts, tabelas e o visualizador de logs são todos painéis HTML Graphics, com uma pequena biblioteca de funções JavaScript (formatação de bytes/duração, parsing dos dataframes do Grafana, renderização de linha/área/empilhado, sparklines) duplicada em cada painel — necessário porque cada instância do plugin roda isolada em sua própria Shadow DOM, sem escopo compartilhado entre painéis.
 
 Confirmar que o plugin instalou: `docker compose logs grafana | grep -i plugin`.
 

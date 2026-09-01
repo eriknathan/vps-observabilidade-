@@ -25,7 +25,7 @@ datasources:
       maxLines: 1000
       # Correlação: um clique num log com um trace/estrutura numérica não é
       # usado aqui (não há tracing na stack). A navegação métricas -> logs é
-      # simplesmente rolar até a linha "Logs" do dashboard Observability
-      # (observability.json) e filtrar por `logs_container` — como tudo vive
-      # num único dashboard, não há necessidade de data links entre painéis.
+      # simplesmente abrir o dashboard "Logs Overview" (logs-overview-html.json)
+      # e filtrar pela mesma variável `container`/`hostname` usada no dashboard
+      # de origem — não há necessidade de data links entre painéis.
     editable: false

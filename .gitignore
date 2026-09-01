@@ -15,6 +15,10 @@ prometheus-data/
 grafana-data/
 loki-data/
 
+# Ajustes locais de compose (ex.: compatibilidade Docker Desktop) — específicos
+# de cada máquina de desenvolvimento, nunca da VPS de produção.
+docker-compose.override.yml
+
 # Editor / OS
 .DS_Store
 .vscode/
